@@ -1,19 +1,14 @@
 package data;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Statement;
-import java.util.ArrayList;
-import java.util.List;
+import java.sql.*;
+import java.text.SimpleDateFormat;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class DBManager {
 
-    private static final String JDBC_URL = "jdbc:mysql://localhost:3306/ChatDB";
+    private static final String JDBC_URL = "jdbc:mysql://127.0.0.1:3306/ChatDB";
     private static final String USER = "root";
-    private static final String PASSWORD = ""; // Ajustez si nécessaire
+    private static final String PASSWORD = "";
 
     public static Connection getConnection() throws SQLException {
         try {
@@ -24,13 +19,7 @@ public class DBManager {
         }
     }
 
-    // ----------------------------------------------------------------------
-    // LOGIQUE UTILISATEUR & AUTHENTIFICATION
-    // ----------------------------------------------------------------------
-
-    public static boolean doesUserExist(String pseudo) throws SQLException {
-        return getUserIdByPseudo(pseudo) != -1;
-    }
+    // --- Méthodes d'authentification et d'inscription ---
 
     public static boolean checkUserCredentials(String pseudo, String password) throws SQLException {
         String sql = "SELECT mot_de_passe FROM Utilisateurs WHERE pseudo = ?";
@@ -38,11 +27,9 @@ public class DBManager {
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
             stmt.setString(1, pseudo);
-
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
-                    String storedPassword = rs.getString("mot_de_passe");
-                    return storedPassword.equals(password);
+                    return rs.getString("mot_de_passe").equals(password);
                 }
             }
         }
@@ -50,6 +37,10 @@ public class DBManager {
     }
 
     public static boolean registerNewUser(String pseudo, String password) throws SQLException {
+        if (doesUserExist(pseudo)) {
+            return false;
+        }
+
         String sql = "INSERT INTO Utilisateurs (pseudo, mot_de_passe) VALUES (?, ?)";
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
@@ -57,20 +48,28 @@ public class DBManager {
             stmt.setString(1, pseudo);
             stmt.setString(2, password);
 
-            return stmt.executeUpdate() > 0;
-
-        } catch (SQLException e) {
-            // Lève l'exception (ex: pseudo déjà pris)
-            throw e;
+            int rowsAffected = stmt.executeUpdate();
+            return rowsAffected > 0;
         }
     }
 
-
-    public static int getUserIdByPseudo(String pseudo) throws SQLException {
-        String sql = "SELECT utilisateur_id FROM Utilisateurs WHERE pseudo = ?";
+    // Méthode utilitaire
+    private static boolean doesUserExist(String pseudo) throws SQLException {
+        String sql = "SELECT pseudo FROM Utilisateurs WHERE pseudo = ?";
         try (Connection conn = getConnection();
              PreparedStatement stmt = conn.prepareStatement(sql)) {
 
+            stmt.setString(1, pseudo);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return rs.next();
+            }
+        }
+    }
+
+    private static int getUserIdByPseudo(String pseudo) throws SQLException {
+        String sql = "SELECT utilisateur_id FROM Utilisateurs WHERE pseudo = ?";
+        try (Connection conn = getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
             stmt.setString(1, pseudo);
             try (ResultSet rs = stmt.executeQuery()) {
                 if (rs.next()) {
@@ -81,9 +80,7 @@ public class DBManager {
         return -1;
     }
 
-    // ----------------------------------------------------------------------
-    // LOGIQUE MESSAGERIE & HISTORIQUE (NOUVEAU)
-    // ----------------------------------------------------------------------
+    // --- LOGIQUE MESSAGERIE & HISTORIQUE ---
 
     public static void saveMessage(String nomSalon, String pseudo, String contenu) throws SQLException {
 
@@ -102,10 +99,9 @@ public class DBManager {
         }
 
         if (utilisateurId == -1 || salonId == -1) {
-            throw new SQLException("Archivage échoué: ID Utilisateur ou ID Salon introuvable. UserID: " + utilisateurId + ", SalonID: " + salonId);
+            throw new SQLException("Archivage échoué: ID Utilisateur ou ID Salon introuvable.");
         }
 
-        // Assurez-vous que la table Messages a une colonne 'horodatage' de type TIMESTAMP
         String sqlInsert = "INSERT INTO Messages (salon_id, utilisateur_id, contenu) VALUES (?, ?, ?)";
         try (Connection conn = getConnection();
              PreparedStatement stmtInsert = conn.prepareStatement(sqlInsert)) {
@@ -120,7 +116,8 @@ public class DBManager {
 
     public static String getSalonHistory(String nomSalon) throws SQLException {
         StringBuilder history = new StringBuilder();
-        String sql = "SELECT u.pseudo, m.contenu " +
+
+        String sql = "SELECT u.pseudo, m.contenu, m.horodatage " +
                 "FROM Messages m " +
                 "JOIN Utilisateurs u ON m.utilisateur_id = u.utilisateur_id " +
                 "JOIN Salons s ON m.salon_id = s.salon_id " +
@@ -133,11 +130,18 @@ public class DBManager {
             stmt.setString(1, nomSalon);
 
             try (ResultSet rs = stmt.executeQuery()) {
+
+                SimpleDateFormat dateFormat = new SimpleDateFormat("dd/MM HH:mm:ss");
+
                 while (rs.next()) {
                     String pseudo = rs.getString("pseudo");
                     String contenu = rs.getString("contenu");
+                    Timestamp timestamp = rs.getTimestamp("horodatage");
 
-                    history.append(pseudo).append(": ").append(contenu).append("\n");
+                    String formattedTime = dateFormat.format(timestamp);
+
+                    history.append("[").append(formattedTime).append("] ")
+                            .append(pseudo).append(": ").append(contenu).append("\n");
                 }
             }
         }

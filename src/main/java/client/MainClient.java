@@ -2,8 +2,6 @@ package client;
 
 import ChatSystem.ChatControl;
 import ChatSystem.ChatControlHelper;
-import data.DBManager;
-import java.sql.SQLException;
 
 import org.omg.CORBA.ORB;
 import org.omg.CosNaming.NamingContextExt;
@@ -19,7 +17,7 @@ import java.util.Scanner;
 public class MainClient {
 
     private String PSEUDO;
-    private ChatControl chatControlRef;
+    private ChatControl chatControlRef; // Référence CORBA
 
     private Socket chatSocket;
     private PrintWriter writer;
@@ -29,14 +27,7 @@ public class MainClient {
     }
 
     public void startClient(String[] args) {
-
-        if (!userLoginRegistration()) {
-            System.out.println("Échec de la connexion. Arrêt du client.");
-            return;
-        }
-
         try {
-            // PHASE 1: Connexion CORBA
             ORB orb = ORB.init(args, null);
             org.omg.CORBA.Object objRef = orb.resolve_initial_references("NameService");
             NamingContextExt ncRef = NamingContextExtHelper.narrow(objRef);
@@ -45,10 +36,15 @@ public class MainClient {
 
             System.out.println("--- Client CORBA connecté au ChatControl ---");
 
+            if (!userLoginRegistration()) {
+                System.out.println("Échec de l'authentification. Arrêt du client.");
+                return;
+            }
+
             clientLoop();
 
         } catch (Exception e) {
-            System.err.println("Erreur de connexion CORBA ou du Service de Nommage: assurez-vous que tnameserv et MainServer sont lancés.");
+            System.err.println("Erreur fatale: Vérifiez que tnameserv et MainServer sont lancés.");
             e.printStackTrace();
         }
     }
@@ -58,43 +54,35 @@ public class MainClient {
         String pseudo;
         String password;
 
-        System.out.println("--- DÉMARRAGE SÉCURISÉ ---");
+        System.out.println("\n--- DÉMARRAGE ET AUTHENTIFICATION (via CORBA) ---");
 
         while (true) {
             System.out.print("Entrez votre pseudo: ");
             pseudo = scanner.nextLine();
 
             try {
-                if (DBManager.doesUserExist(pseudo)) {
-                    // Utilisateur existant (Ancien utilisateur)
-                    System.out.print("Mot de passe: ");
-                    password = scanner.nextLine();
+                System.out.print("Mot de passe: ");
+                password = scanner.nextLine();
 
-                    if (DBManager.checkUserCredentials(pseudo, password)) {
-                        System.out.println("Connexion réussie!");
-                        this.PSEUDO = pseudo;
-                        return true;
-                    } else {
-                        System.err.println("Mot de passe incorrect.");
-                    }
-
+                if (chatControlRef.authentifier(pseudo, password)) {
+                    System.out.println("Connexion réussie!");
+                    this.PSEUDO = pseudo;
+                    return true;
                 } else {
-                    // Nouvel utilisateur
-                    System.out.println("Pseudo non trouvé. Créons un nouveau compte.");
-                    System.out.print("Créer un mot de passe: ");
-                    password = scanner.nextLine();
-
-                    if (DBManager.registerNewUser(pseudo, password)) {
-                        System.out.println("Enregistrement réussi. Connexion automatique.");
-                        this.PSEUDO = pseudo;
-                        return true;
-                    } else {
-                        System.err.println("Échec de l'enregistrement. Veuillez réessayer.");
+                    System.out.println("Échec de la connexion. Voulez-vous vous inscrire ? (o/n)");
+                    if (scanner.nextLine().equalsIgnoreCase("o")) {
+                        if (chatControlRef.inscrire(pseudo, password)) {
+                            System.out.println("Enregistrement réussi. Connexion automatique.");
+                            this.PSEUDO = pseudo;
+                            return true;
+                        } else {
+                            System.err.println("Échec de l'enregistrement (pseudo déjà pris ou erreur serveur).");
+                        }
                     }
                 }
-            } catch (SQLException e) {
-                System.err.println("Erreur de base de données : " + e.getMessage());
-                return false; // Échec fatal
+            } catch (Exception e) {
+                System.err.println("Erreur de communication CORBA : " + e.getMessage());
+                return false;
             }
         }
     }
@@ -135,7 +123,7 @@ public class MainClient {
                         System.out.print("Nom du nouveau salon : ");
                         String nouveauNom = scanner.nextLine();
                         chatControlRef.creerSalon(nouveauNom, PSEUDO);
-                        System.out.println("Salon '" + nouveauNom + "' créé et démarré (via CORBA).");
+                        System.out.println("Salon '" + nouveauNom + "' créé (via CORBA).");
                         break;
                     case "4":
                         return;
@@ -154,13 +142,13 @@ public class MainClient {
         int port = Integer.parseInt(parts[1]);
 
         try {
-            // 1. AFFICHAGE DE L'HISTORIQUE
+            // 1. AFFICHAGE DE L'HISTORIQUE (Via CORBA)
             System.out.println("\n*** Historique du salon " + nomSalon + " ***");
-            String history = DBManager.getSalonHistory(nomSalon);
+            String history = chatControlRef.getSalonHistory(nomSalon);
             System.out.print(history);
             System.out.println("************************************************\n");
 
-            // 2. PHASE 2: Connexion Socket TCP (Messagerie temps réel)
+            // 2. Connexion Socket TCP (Messagerie temps réel)
             chatSocket = new Socket(ip, port);
             writer = new PrintWriter(chatSocket.getOutputStream(), true);
 
@@ -173,24 +161,22 @@ public class MainClient {
             BufferedReader consoleReader = new BufferedReader(new InputStreamReader(System.in));
             String line;
 
-            while ((line = consoleReader.readLine()) != null) {
-                if (line.equalsIgnoreCase("QUITTER")) {
-                    break;
-                }
+            // Boucle de saisie et d'envoi de messages
+            while (!(line = consoleReader.readLine()).trim().equalsIgnoreCase("QUITTER")) {
                 writer.println(PSEUDO + ": " + line);
             }
 
         } catch (IOException e) {
-            System.err.println("Erreur de connexion au Socket TCP du salon : " + e.getMessage());
-        } catch (SQLException e) {
-            System.err.println("Erreur lors de la récupération de l'historique : " + e.getMessage());
+            System.err.println("Déconnexion du salon (Socket fermé) : " + e.getMessage());
+        } catch (Exception e) {
+            System.err.println("Erreur critique dans le salon : " + e.getMessage());
         } finally {
             try {
                 if (chatSocket != null && !chatSocket.isClosed()) {
                     chatSocket.close();
                 }
                 if (chatControlRef != null) {
-                    chatControlRef.quitterSalon(nomSalon, PSEUDO);
+                    chatControlRef.quitterSalon(nomSalon, PSEUDO); // Informe le serveur CORBA
                 }
             } catch (Exception e) {
                 System.err.println("Erreur lors de la fermeture de la connexion : " + e.getMessage());

@@ -5,10 +5,8 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.Socket;
 
-/**
- * Thread dédié à l'écoute des messages provenant du serveur de salon (Socket TCP).
- */
 public class ClientReceiver extends Thread {
+
     private final Socket socket;
 
     public ClientReceiver(Socket socket) {
@@ -18,20 +16,21 @@ public class ClientReceiver extends Thread {
     @Override
     public void run() {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(socket.getInputStream()))) {
-            String message;
-            while ((message = reader.readLine()) != null) {
-                // Le message en temps réel apparaît juste après le prompt.
-                System.out.println("\n[MESSAGE REÇU] " + message);
+            String line;
+            // Lit les messages du Socket du salon tant que le socket est ouvert
+            while ((line = reader.readLine()) != null) {
+                // Affiche le message reçu
+                System.out.println("\n" + line + "\nVotre message (QUITTER pour sortir) : ");
             }
         } catch (IOException e) {
-            System.err.println("Connexion au salon perdue ou fermée.");
+            // Le thread se termine naturellement à la coupure de la connexion.
         } finally {
             try {
                 if (!socket.isClosed()) {
                     socket.close();
                 }
             } catch (IOException e) {
-                // Ignorer l'erreur
+                // Ignore
             }
         }
     }
